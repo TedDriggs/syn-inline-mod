@@ -7,6 +7,7 @@ repository = "https://github.com/TedDriggs/syn-inline-mod"
 documentation = "https://docs.rs/syn-inline-mod/0.1.0"
 license = "MIT"
 readme = "README.md"
+description = "Inlines modules in Rust source code for source analysis"
 
 [dependencies]
 syn = { version = "0.15.26", features = ["full", "visit-mut"] }
