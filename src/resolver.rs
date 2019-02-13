@@ -38,7 +38,8 @@ pub(crate) struct TestResolver {
 #[cfg(test)]
 impl TestResolver {
     pub fn register(&mut self, path: &'static str, contents: &'static str) {
-        self.files.insert(Path::new(path).to_path_buf(), contents.into());
+        self.files
+            .insert(Path::new(path).to_path_buf(), contents.into());
     }
 }
 
@@ -53,7 +54,10 @@ impl FileResolver for TestResolver {
             .files
             .get(path)
             .expect("Test should only refer to files in context");
-        syn::parse_file(src).expect("Test data should be parseable")
+        syn::parse_file(src).expect(&format!(
+            "Test code in {} should be parseable",
+            path.to_string_lossy()
+        ))
     }
 }
 
@@ -69,6 +73,10 @@ impl FileResolver for PathCommentResolver {
     }
 
     fn resolve(&self, path: &Path) -> syn::File {
-        syn::parse_file(&format!(r#"const PATH: &str = "{}";"#, path.to_str().unwrap())).unwrap()
+        syn::parse_file(&format!(
+            r#"const PATH: &str = "{}";"#,
+            path.to_str().unwrap()
+        ))
+        .unwrap()
     }
 }
