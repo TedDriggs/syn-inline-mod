@@ -54,19 +54,17 @@ impl<'a, R: FileResolver + Clone> VisitMut for Visitor<'a, R> {
             // If we find a path that points to a satisfactory file, expand it
             // and replace the items with the file items. If something goes wrong,
             // leave the file alone.
-            i.content = self
+            let file = self
                 .mod_context
                 .relative_to(self.path)
                 .into_iter()
                 .find(|p| self.resolver.path_exists(&p))
-                .map(|path| {
-                    (
-                        Default::default(),
-                        Visitor::with_resolver(&path, self.resolver.clone())
-                            .visit()
-                            .items,
-                    )
-                });
+                .map(|path| Visitor::with_resolver(&path, self.resolver.clone()).visit());
+
+            if let Some(syn::File { attrs, items, .. }) = file {
+                i.attrs.extend(attrs);
+                i.content = Some((Default::default(), items));
+            }
         }
 
         self.mod_context.pop();
