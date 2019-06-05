@@ -11,8 +11,52 @@ pub(crate) use visitor::Visitor;
 
 /// Parse the source code in `src_file` and return a `syn::File` that has all modules
 /// recursively inlined.
+///
+/// This is equivalent to using an `InlinerBuilder` with the default settings.
 pub fn parse_and_inline_modules(src_file: &std::path::Path) -> syn::File {
-    Visitor::<FsResolver>::new(src_file).visit()
+    InlinerBuilder::default().parse_and_inline_modules(src_file).unwrap()
+}
+
+/// A builder that can configure how to inline modules.
+///
+/// After creating a builder, set configuration options using the methods
+/// taking `&mut self`, then parse and inline one or more files using
+/// `parse_and_inline_modules`.
+#[derive(Debug)]
+pub struct InlinerBuilder {
+    root: bool,
+}
+
+impl Default for InlinerBuilder {
+    fn default() -> Self {
+        InlinerBuilder {
+            root: true
+        }
+    }
+}
+
+impl InlinerBuilder {
+    /// Create a new `InlinerBuilder` with the default options.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Configures whether the module being parsed is a root module or not.
+    ///
+    /// A root module is one that is passed directly to `rustc`. A non-root
+    /// module is one that is included from another module using a `mod` item.
+    ///
+    /// Default: `true`.
+    pub fn root(&mut self, root: bool) -> &mut Self {
+        self.root = root;
+        self
+    }
+
+    /// Parse the source code in `src_file` and return a `syn::File` that has all modules
+    /// recursively inlined.
+    pub fn parse_and_inline_modules(&self, src_file: &std::path::Path) -> Result<syn::File, ()> {
+        Ok(Visitor::<FsResolver>::new(src_file, self.root).visit())
+    }
 }
 
 #[cfg(test)]
@@ -51,6 +95,7 @@ mod tests {
     fn happy_path() {
         let mut visitor = Visitor::<TestResolver>::with_resolver(
             &Path::new("src/lib.rs"),
+            true,
             Cow::Owned(make_test_env()),
         );
 
@@ -112,7 +157,7 @@ mod tests {
         );
         env.register("src/empty.rs", "");
 
-        let mut visitor = Visitor::with_resolver(&Path::new("src/lib.rs"), Cow::Borrowed(&env));
+        let mut visitor = Visitor::with_resolver(&Path::new("src/lib.rs"), true, Cow::Borrowed(&env));
 
         assert_eq!(
             visitor.visit().into_token_stream().to_string(),
@@ -167,7 +212,7 @@ mod tests {
         );
         env.register("src/empty.rs", "");
 
-        let mut visitor = Visitor::with_resolver(&Path::new("src/lib.rs"), Cow::Borrowed(&env));
+        let mut visitor = Visitor::with_resolver(&Path::new("src/lib.rs"), true, Cow::Borrowed(&env));
 
         assert_eq!(
             visitor.visit().into_token_stream().to_string(),

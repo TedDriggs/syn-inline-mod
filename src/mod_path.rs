@@ -5,12 +5,6 @@ use syn::{Ident, ItemMod, Lit, Meta};
 
 /// Extensions to the built-in `Path` type for the purpose of mod expansion.
 trait ModPath {
-    /// Check if the current file is the main or lib file. If so, we need to check, in order:
-    ///
-    /// 1. `./{name}.rs`
-    /// 2. `./{name}/mod.rs`
-    fn is_lib_or_main(&self) -> bool;
-
     /// Check if the current file is a 2015-style mod file. If so, named mods should be
     /// resolved in the current directory. If not, we should check, in order:
     ///
@@ -20,12 +14,6 @@ trait ModPath {
 }
 
 impl ModPath for Path {
-    fn is_lib_or_main(&self) -> bool {
-        self.file_name()
-            .map(|s| s == "lib.rs" || s == "main.rs")
-            .unwrap_or_default()
-    }
-
     fn is_mod_file(&self) -> bool {
         self.file_name().map(|s| s == "mod.rs").unwrap_or_default()
     }
@@ -46,10 +34,10 @@ impl ModContext {
 
     /// Get the list of places a module's source code may appear relative to the current file
     /// location.
-    pub fn relative_to(&self, base: &Path) -> Vec<PathBuf> {
+    pub fn relative_to(&self, base: &Path, root: bool) -> Vec<PathBuf> {
         let mut parent = base.to_path_buf();
         parent.pop();
-        if base.is_lib_or_main() || base.is_mod_file() {
+        if root || base.is_mod_file() {
             self.to_path_bufs()
                 .into_iter()
                 .map(|end| parent.clone().join(end))
@@ -175,7 +163,7 @@ mod tests {
         ]);
 
         assert_eq!(
-            ctx.relative_to(&Path::new("/src/lib.rs")),
+            ctx.relative_to(&Path::new("/src/lib.rs"), true),
             vec![
                 Path::new("/src/threads/local.rs"),
                 Path::new("/src/threads/local/mod.rs"),
@@ -191,7 +179,7 @@ mod tests {
         ]);
 
         assert_eq!(
-            ctx.relative_to(&Path::new("/src/runner/mod.rs")),
+            ctx.relative_to(&Path::new("/src/runner/mod.rs"), false),
             vec![
                 Path::new("/src/runner/threads/local.rs"),
                 Path::new("/src/runner/threads/local/mod.rs"),
@@ -199,8 +187,9 @@ mod tests {
         );
     }
 
-    /// Check that files not named 'mod.rs', 'lib.rs', or 'main.rs' have their file stem preserved
+    /// Check that non-root modules and files not named 'mod.rs' have their file stem preserved
     /// in the search when generating candidate paths.
+    // e.g. `mod runner` called from `/src/lib.rs`
     #[test]
     fn relative_to_2018_mod() {
         let ctx = ModContext::from(vec![
@@ -209,10 +198,29 @@ mod tests {
         ]);
 
         assert_eq!(
-            ctx.relative_to(&Path::new("/src/runner.rs")),
+            ctx.relative_to(&Path::new("/src/runner.rs"), false),
             vec![
                 Path::new("/src/runner/threads/local.rs"),
                 Path::new("/src/runner/threads/local/mod.rs"),
+            ]
+        );
+    }
+
+    /// Check that root modules are not part of the directory
+    /// when generating candidate paths.
+    // e.g. `rustc` is invoked with `src/runner.rs` as the input
+    #[test]
+    fn relative_to_non_standard_root() {
+        let ctx = ModContext::from(vec![
+            ModSegment::new_ident("threads"),
+            ModSegment::new_ident("local"),
+        ]);
+
+        assert_eq!(
+            ctx.relative_to(&Path::new("/src/runner.rs"), true),
+            vec![
+                Path::new("/src/threads/local.rs"),
+                Path::new("/src/threads/local/mod.rs"),
             ]
         );
     }
@@ -227,7 +235,7 @@ mod tests {
         ]);
 
         assert_eq!(
-            ctx.relative_to(&Path::new("/src/lib.rs")),
+            ctx.relative_to(&Path::new("/src/lib.rs"), true),
             vec![Path::new("/src/threads/tls.rs")]
         );
     }
@@ -241,7 +249,7 @@ mod tests {
         ]);
 
         assert_eq!(
-            ctx.relative_to(&Path::new("/src/lib.rs")),
+            ctx.relative_to(&Path::new("/src/lib.rs"), true),
             vec![
                 Path::new("/src/threads/tls.rs"),
                 Path::new("/src/threads/tls/mod.rs"),
