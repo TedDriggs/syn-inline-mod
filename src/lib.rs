@@ -1,6 +1,8 @@
 //! Utility to traverse the file-system and inline modules that are declared as references to
 //! other Rust files.
 
+use std::{borrow::Cow, path::{Path, PathBuf}};
+
 mod mod_path;
 mod resolver;
 mod visitor;
@@ -25,12 +27,14 @@ pub fn parse_and_inline_modules(src_file: &std::path::Path) -> syn::File {
 #[derive(Debug)]
 pub struct InlinerBuilder {
     root: bool,
+    error_not_found: bool,
 }
 
 impl Default for InlinerBuilder {
     fn default() -> Self {
         InlinerBuilder {
-            root: true
+            root: true,
+            error_not_found: false,
         }
     }
 }
@@ -52,21 +56,70 @@ impl InlinerBuilder {
         self
     }
 
+    /// Configures whether unexpanded modules (due to a missing file) will lead
+    /// to an `Err` return value or not.
+    ///
+    /// Default: `false`.
+    pub fn error_not_found(&mut self, error_not_found: bool) -> &mut Self {
+        self.error_not_found = error_not_found;
+        self
+    }
+
     /// Parse the source code in `src_file` and return a `syn::File` that has all modules
     /// recursively inlined.
-    pub fn parse_and_inline_modules(&self, src_file: &std::path::Path) -> Result<syn::File, ()> {
-        Ok(Visitor::<FsResolver>::new(src_file, self.root).visit())
+    pub fn parse_and_inline_modules(&self, src_file: &std::path::Path) -> Result<syn::File, Error> {
+        self.parse_internal(src_file, FsResolver::default())
     }
+
+    fn parse_internal<R: FileResolver + Clone>(&self, src_file: &std::path::Path, resolver: R) -> Result<syn::File, Error> {
+        let mut errors = if self.error_not_found {
+            Some(vec![])
+        } else {
+            None
+        };
+        let result = Visitor::<R>::with_resolver(src_file, self.root, errors.as_mut(), Cow::Owned(resolver)).visit();
+        match errors {
+            Some(ref errors) if errors.len() == 0 => Ok(result),
+            None => Ok(result),
+            Some(errors) => Err(Error::NotFound(errors)),
+        }
+    }
+}
+
+/// A source location
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceLocation {
+    pub path: PathBuf,
+    pub line: usize,
+    pub column: usize,
+    _private: ()
+}
+
+impl SourceLocation {
+    pub(crate) fn new(path: &Path, span: proc_macro2::Span) -> Self {
+        SourceLocation {
+            path: path.into(),
+            line: span.start().line,
+            column: span.start().column,
+            _private: (),
+        }
+    }
+}
+
+/// An error that was encountered while inlining modules
+#[derive(Debug)]
+pub enum Error {
+    /// The contents for one or more modules could not be found
+    NotFound(Vec<(String, SourceLocation)>),
+    #[doc(hidden)]
+    __NonExhaustive,
 }
 
 #[cfg(test)]
 mod tests {
-    use std::borrow::Cow;
-    use std::path::Path;
-
     use quote::{quote, ToTokens};
 
-    use crate::{TestResolver, Visitor};
+    use super::*;
 
     fn make_test_env() -> TestResolver {
         let mut env = TestResolver::default();
@@ -93,14 +146,12 @@ mod tests {
     /// Run a full test, exercising the entirety of the functionality in this crate.
     #[test]
     fn happy_path() {
-        let mut visitor = Visitor::<TestResolver>::with_resolver(
-            &Path::new("src/lib.rs"),
-            true,
-            Cow::Owned(make_test_env()),
-        );
+        let result = InlinerBuilder::default()
+            .parse_internal(Path::new("src/lib.rs"), make_test_env())
+            .unwrap();
 
         assert_eq!(
-            visitor.visit().into_token_stream().to_string(),
+            result.into_token_stream().to_string(),
             quote! {
                 mod first {
                     mod second {
@@ -121,6 +172,33 @@ mod tests {
             }
             .to_string()
         );
+    }
+
+    /// Test case involving a missing module
+    #[test]
+    fn missing_module() {
+        let mut env = TestResolver::default();
+        env.register("src/lib.rs", "mod missing;");
+
+        let result = InlinerBuilder::default()
+            .error_not_found(true)
+            .parse_internal(Path::new("src/lib.rs"), env);
+
+        match result {
+            Err(Error::NotFound(errors)) => {
+                assert_eq!(errors, [(
+                    "missing".into(),
+                    SourceLocation {
+                        path: PathBuf::from("src/lib.rs"),
+                        line: 1,
+                        column: 0,
+                        _private: ()
+                    }
+                )]);
+            }
+            Ok(parsed) => panic!("Expected to get errors in parse/inline: {}", parsed.into_token_stream()),
+            _ => unreachable!()
+        }
     }
 
     /// Test case involving `cfg_attr` from the original request for implementation.
@@ -157,10 +235,12 @@ mod tests {
         );
         env.register("src/empty.rs", "");
 
-        let mut visitor = Visitor::with_resolver(&Path::new("src/lib.rs"), true, Cow::Borrowed(&env));
+        let result = InlinerBuilder::default()
+            .parse_internal(Path::new("src/lib.rs"), env)
+            .unwrap();
 
         assert_eq!(
-            visitor.visit().into_token_stream().to_string(),
+            result.into_token_stream().to_string(),
             quote! {
                 #[cfg(feature = "m1")]
                 mod m1 {
@@ -212,10 +292,12 @@ mod tests {
         );
         env.register("src/empty.rs", "");
 
-        let mut visitor = Visitor::with_resolver(&Path::new("src/lib.rs"), true, Cow::Borrowed(&env));
+        let result = InlinerBuilder::default()
+            .parse_internal(Path::new("src/lib.rs"), env)
+            .unwrap();
 
         assert_eq!(
-            visitor.visit().into_token_stream().to_string(),
+            result.into_token_stream().to_string(),
             quote! {
                 #[cfg(feature = "m1")]
                 mod m1 {
