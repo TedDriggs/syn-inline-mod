@@ -123,11 +123,9 @@ impl From<&ItemMod> for ModSegment {
     fn from(v: &ItemMod) -> Self {
         for attr in &v.attrs {
             if let Ok(Meta::NameValue(name_value)) = attr.parse_meta() {
-                if let Some(ident) = name_value.path.get_ident() {
-                    if ident.eq("path") {
-                        if let Lit::Str(path_value) = name_value.lit {
-                            return ModSegment::Path(path_value.value().into());
-                        }
+                if name_value.path.is_ident("path") {
+                    if let Lit::Str(path_value) = name_value.lit {
+                        return ModSegment::Path(path_value.value().into());
                     }
                 }
             }
