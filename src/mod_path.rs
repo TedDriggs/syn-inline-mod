@@ -2,7 +2,6 @@
 
 use std::path::{Path, PathBuf};
 use syn::{Ident, ItemMod, Lit, Meta};
-use quote::ToTokens;
 
 /// Extensions to the built-in `Path` type for the purpose of mod expansion.
 trait ModPath {
@@ -124,9 +123,11 @@ impl From<&ItemMod> for ModSegment {
     fn from(v: &ItemMod) -> Self {
         for attr in &v.attrs {
             if let Ok(Meta::NameValue(name_value)) = attr.parse_meta() {
-                if name_value.path.to_token_stream().to_string() == "path" {
-                    if let Lit::Str(path_value) = name_value.lit {
-                        return ModSegment::Path(path_value.value().into());
+                if let Some(ident) = name_value.path.get_ident() {
+                    if ident.eq("path") {
+                        if let Lit::Str(path_value) = name_value.lit {
+                            return ModSegment::Path(path_value.value().into());
+                        }
                     }
                 }
             }
