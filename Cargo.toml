@@ -1,10 +1,10 @@
 [package]
 name = "syn-inline-mod"
-version = "0.2.0"
+version = "0.3.0"
 authors = ["Ted Driggs <tdriggs@outlook.com>"]
 edition = "2018"
 repository = "https://github.com/TedDriggs/syn-inline-mod"
-documentation = "https://docs.rs/syn-inline-mod/0.2.0"
+documentation = "https://docs.rs/syn-inline-mod/0.3.0"
 license = "MIT"
 readme = "README.md"
 description = "Inlines modules in Rust source code for source analysis"
