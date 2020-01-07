@@ -54,10 +54,12 @@ impl FileResolver for TestResolver {
             .files
             .get(path)
             .expect("Test should only refer to files in context");
-        syn::parse_file(src).expect(&format!(
-            "Test code in {} should be parseable",
-            path.to_string_lossy()
-        ))
+        syn::parse_file(src).unwrap_or_else(|_| {
+            panic!(
+                "Test code in {} should be parseable",
+                path.to_string_lossy()
+            )
+        })
     }
 }
 

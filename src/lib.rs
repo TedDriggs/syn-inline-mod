@@ -1,7 +1,10 @@
 //! Utility to traverse the file-system and inline modules that are declared as references to
 //! other Rust files.
 
-use std::{borrow::Cow, path::{Path, PathBuf}};
+use std::{
+    borrow::Cow,
+    path::{Path, PathBuf},
+};
 
 mod mod_path;
 mod resolver;
@@ -16,7 +19,9 @@ pub(crate) use visitor::Visitor;
 ///
 /// This is equivalent to using an `InlinerBuilder` with the default settings.
 pub fn parse_and_inline_modules(src_file: &std::path::Path) -> syn::File {
-    InlinerBuilder::default().parse_and_inline_modules(src_file).unwrap()
+    InlinerBuilder::default()
+        .parse_and_inline_modules(src_file)
+        .unwrap()
 }
 
 /// A builder that can configure how to inline modules.
@@ -71,15 +76,21 @@ impl InlinerBuilder {
         self.parse_internal(src_file, FsResolver::default())
     }
 
-    fn parse_internal<R: FileResolver + Clone>(&self, src_file: &std::path::Path, resolver: R) -> Result<syn::File, Error> {
+    fn parse_internal<R: FileResolver + Clone>(
+        &self,
+        src_file: &std::path::Path,
+        resolver: R,
+    ) -> Result<syn::File, Error> {
         let mut errors = if self.error_not_found {
             Some(vec![])
         } else {
             None
         };
-        let result = Visitor::<R>::with_resolver(src_file, self.root, errors.as_mut(), Cow::Owned(resolver)).visit();
+        let result =
+            Visitor::<R>::with_resolver(src_file, self.root, errors.as_mut(), Cow::Owned(resolver))
+                .visit();
         match errors {
-            Some(ref errors) if errors.len() == 0 => Ok(result),
+            Some(ref errors) if errors.is_empty() => Ok(result),
             None => Ok(result),
             Some(errors) => Err(Error::NotFound(errors)),
         }
@@ -92,7 +103,7 @@ pub struct SourceLocation {
     pub path: PathBuf,
     pub line: usize,
     pub column: usize,
-    _private: ()
+    _private: (),
 }
 
 impl SourceLocation {
@@ -186,18 +197,24 @@ mod tests {
 
         match result {
             Err(Error::NotFound(errors)) => {
-                assert_eq!(errors, [(
-                    "missing".into(),
-                    SourceLocation {
-                        path: PathBuf::from("src/lib.rs"),
-                        line: 1,
-                        column: 0,
-                        _private: ()
-                    }
-                )]);
+                assert_eq!(
+                    errors,
+                    [(
+                        "missing".into(),
+                        SourceLocation {
+                            path: PathBuf::from("src/lib.rs"),
+                            line: 1,
+                            column: 0,
+                            _private: ()
+                        }
+                    )]
+                );
             }
-            Ok(parsed) => panic!("Expected to get errors in parse/inline: {}", parsed.into_token_stream()),
-            _ => unreachable!()
+            Ok(parsed) => panic!(
+                "Expected to get errors in parse/inline: {}",
+                parsed.into_token_stream()
+            ),
+            _ => unreachable!(),
         }
     }
 

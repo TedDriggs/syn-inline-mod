@@ -75,10 +75,7 @@ impl ModContext {
     /// Checks if the last term in the context was a module identifier, rather
     /// than an explicit `path` attribute.
     fn is_last_ident(&self) -> bool {
-        self.0
-            .get(self.0.len() - 1)
-            .map(|seg| seg.is_ident())
-            .unwrap_or_default()
+        self.0.last().map(|seg| seg.is_ident()).unwrap_or_default()
     }
 }
 
