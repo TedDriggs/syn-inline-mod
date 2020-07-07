@@ -18,12 +18,16 @@ pub(crate) struct Visitor<'a, R: Clone> {
     /// a direct file-system dependency so the expander can be tested.
     resolver: Cow<'a, R>,
     /// A log of module items that weren't expanded.
-    not_found_log: Option<&'a mut Vec<(String, SourceLocation)>>
+    not_found_log: Option<&'a mut Vec<(String, SourceLocation)>>,
 }
 
 impl<'a, R: FileResolver + Default + Clone> Visitor<'a, R> {
     /// Create a new visitor with a default instance of the specified `FileResolver` type.
-    fn new(path: &'a Path, root: bool, not_found_log: Option<&'a mut Vec<(String, SourceLocation)>>) -> Self {
+    fn new(
+        path: &'a Path,
+        root: bool,
+        not_found_log: Option<&'a mut Vec<(String, SourceLocation)>>,
+    ) -> Self {
         Self::with_resolver(path, root, not_found_log, Cow::Owned(R::default()))
     }
 }
@@ -31,7 +35,12 @@ impl<'a, R: FileResolver + Default + Clone> Visitor<'a, R> {
 impl<'a, R: FileResolver + Clone> Visitor<'a, R> {
     /// Create a new visitor with the specified `FileResolver` instance. This will be
     /// used by all spawned visitors as we recurse down through the source code.
-    pub fn with_resolver(path: &'a Path, root: bool, not_found_log: Option<&'a mut Vec<(String, SourceLocation)>>, resolver: Cow<'a, R>) -> Self {
+    pub fn with_resolver(
+        path: &'a Path,
+        root: bool,
+        not_found_log: Option<&'a mut Vec<(String, SourceLocation)>>,
+        resolver: Cow<'a, R>,
+    ) -> Self {
         Self {
             path,
             root,
@@ -65,13 +74,24 @@ impl<'a, R: FileResolver + Clone> VisitMut for Visitor<'a, R> {
                 .relative_to(self.path, self.root)
                 .into_iter()
                 .find(|p| self.resolver.path_exists(&p))
-                .map(|path| Visitor::with_resolver(&path, false, self.not_found_log.as_mut().map(|v|&mut **v), self.resolver.clone()).visit());
+                .map(|path| {
+                    Visitor::with_resolver(
+                        &path,
+                        false,
+                        self.not_found_log.as_mut().map(|v| &mut **v),
+                        self.resolver.clone(),
+                    )
+                    .visit()
+                });
 
             if let Some(syn::File { attrs, items, .. }) = file {
                 i.attrs.extend(attrs);
                 i.content = Some((Default::default(), items));
             } else if let Some(ref mut errors) = self.not_found_log {
-                errors.push((i.ident.to_string(), SourceLocation::new(self.path, i.mod_token.span)))
+                errors.push((
+                    i.ident.to_string(),
+                    SourceLocation::new(self.path, i.mod_token.span),
+                ))
             }
         }
 
