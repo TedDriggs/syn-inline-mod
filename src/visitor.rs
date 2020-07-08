@@ -18,13 +18,13 @@ pub(crate) struct Visitor<'a, R: Clone> {
     /// a direct file-system dependency so the expander can be tested.
     resolver: Cow<'a, R>,
     /// A log of module items that weren't expanded.
-    inline_error_log: Option<&'a mut Vec<InlineError>>,
+    error_log: Option<&'a mut Vec<InlineError>>,
 }
 
 impl<'a, R: FileResolver + Default + Clone> Visitor<'a, R> {
     /// Create a new visitor with a default instance of the specified `FileResolver` type.
-    fn new(path: &'a Path, root: bool, inline_error_log: Option<&'a mut Vec<InlineError>>) -> Self {
-        Self::with_resolver(path, root, inline_error_log, Cow::Owned(R::default()))
+    fn new(path: &'a Path, root: bool, error_log: Option<&'a mut Vec<InlineError>>) -> Self {
+        Self::with_resolver(path, root, error_log, Cow::Owned(R::default()))
     }
 }
 
@@ -34,14 +34,14 @@ impl<'a, R: FileResolver + Clone> Visitor<'a, R> {
     pub fn with_resolver(
         path: &'a Path,
         root: bool,
-        inline_error_log: Option<&'a mut Vec<InlineError>>,
+        error_log: Option<&'a mut Vec<InlineError>>,
         resolver: Cow<'a, R>,
     ) -> Self {
         Self {
             path,
             root,
             resolver,
-            inline_error_log,
+            error_log,
             mod_context: Default::default(),
         }
     }
@@ -85,7 +85,7 @@ impl<'a, R: FileResolver + Clone> VisitMut for Visitor<'a, R> {
             let mut visitor = Visitor::with_resolver(
                 &first_candidate,
                 false,
-                self.inline_error_log.as_mut().map(|v| &mut **v),
+                self.error_log.as_mut().map(|v| &mut **v),
                 self.resolver.clone(),
             );
 
@@ -95,7 +95,7 @@ impl<'a, R: FileResolver + Clone> VisitMut for Visitor<'a, R> {
                     i.content = Some((Default::default(), items));
                 }
                 Err(kind) => {
-                    if let Some(ref mut errors) = self.inline_error_log {
+                    if let Some(ref mut errors) = self.error_log {
                         errors.push(InlineError::new(self.path, i, first_candidate, kind));
                     }
                 }
