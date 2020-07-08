@@ -4,7 +4,7 @@ use std::path::Path;
 use syn::visit_mut::VisitMut;
 use syn::ItemMod;
 
-use crate::{ErrorKind, FileResolver, FsResolver, InlineError, ModContext};
+use crate::{Error, FileResolver, FsResolver, InlineError, ModContext};
 
 pub(crate) struct Visitor<'a, R: Clone> {
     /// The current file's path.
@@ -46,7 +46,7 @@ impl<'a, R: FileResolver + Clone> Visitor<'a, R> {
         }
     }
 
-    pub fn visit(&mut self) -> Result<syn::File, ErrorKind> {
+    pub fn visit(&mut self) -> Result<syn::File, Error> {
         let mut syntax = self.resolver.resolve(self.path)?;
         self.visit_file_mut(&mut syntax);
         Ok(syntax)

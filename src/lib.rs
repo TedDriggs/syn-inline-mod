@@ -37,6 +37,7 @@ pub fn parse_and_inline_modules(src_file: &Path) -> syn::File {
     InlinerBuilder::default()
         .parse_and_inline_modules(src_file)
         .unwrap()
+        .output
 }
 
 /// A builder that can configure how to inline modules.
@@ -47,15 +48,11 @@ pub fn parse_and_inline_modules(src_file: &Path) -> syn::File {
 #[derive(Debug)]
 pub struct InlinerBuilder {
     root: bool,
-    track_errors: bool,
 }
 
 impl Default for InlinerBuilder {
     fn default() -> Self {
-        InlinerBuilder {
-            root: true,
-            track_errors: false,
-        }
+        InlinerBuilder { root: true }
     }
 }
 
@@ -76,18 +73,9 @@ impl InlinerBuilder {
         self
     }
 
-    /// Configures whether unexpanded modules (due to missing files or invalid Rust source code)
-    /// will lead to an `Err` return value or not.
-    ///
-    /// Default: `false`.
-    pub fn track_errors(&mut self, track_errors: bool) -> &mut Self {
-        self.track_errors = track_errors;
-        self
-    }
-
     /// Parse the source code in `src_file` and return a `syn::File` that has all modules
     /// recursively inlined.
-    pub fn parse_and_inline_modules(&self, src_file: &Path) -> Result<syn::File, Error> {
+    pub fn parse_and_inline_modules(&self, src_file: &Path) -> Result<InliningResult, Error> {
         self.parse_internal(src_file, FsResolver::default())
     }
 
@@ -95,69 +83,24 @@ impl InlinerBuilder {
         &self,
         src_file: &Path,
         resolver: R,
-    ) -> Result<syn::File, Error> {
-        let mut errors = if self.track_errors {
-            Some(vec![])
-        } else {
-            None
-        };
+    ) -> Result<InliningResult, Error> {
+        // XXX There is no way for library callers to disable error tracking,
+        // but until we're sure that there's no performance impact of enabling it
+        // we'll let downstream code think that error tracking is optional.
+        let mut errors = Some(vec![]);
         let result =
             Visitor::<R>::with_resolver(src_file, self.root, errors.as_mut(), Cow::Owned(resolver))
-                .visit()
-                .map_err(Error::Root)?;
-        match errors {
-            Some(ref errors) if errors.is_empty() => Ok(result),
-            None => Ok(result),
-            Some(errors) => Err(Error::Inline(IncompleteInlining::new(result, errors))),
-        }
+                .visit()?;
+        Ok(InliningResult::new(result, errors.unwrap_or_default()))
     }
 }
 
 /// An error that was encountered while reading, parsing or inlining a module.
+///
+/// Errors block further progress on inlining, but do not invalidate other progress.
+/// Therefore, only an error on the initially-passed-in-file is fatal to inlining.
 #[derive(Debug)]
 pub enum Error {
-    /// An error happened while reading or parsing the initial file.
-    ///
-    /// For example, the initial file wasn't found or wasn't a valid Rust file.
-    Root(ErrorKind),
-
-    /// The initial file was successfully loaded, but some errors happened while attempting to
-    /// inline modules.
-    Inline(IncompleteInlining),
-}
-
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Error::Root(kind) => write!(f, "error for initial file: {}", kind),
-            Error::Inline(errors) => errors.fmt(f),
-        }
-    }
-}
-
-impl error::Error for Error {}
-
-impl Error {
-    /// Returns true if the error happened while reading or parsing the initial file.
-    pub fn is_initial(&self) -> bool {
-        match self {
-            Error::Root(_) => true,
-            Error::Inline(_) => false,
-        }
-    }
-
-    /// Returns true if the error happened while inlining modules.
-    pub fn is_inline(&self) -> bool {
-        match self {
-            Error::Root(_) => false,
-            Error::Inline(_) => true,
-        }
-    }
-}
-
-/// The kind of error that was encountered for a particular file.
-#[derive(Debug)]
-pub enum ErrorKind {
     /// An error happened while opening or reading the file.
     Io(io::Error),
 
@@ -165,47 +108,42 @@ pub enum ErrorKind {
     Parse(syn::Error),
 }
 
-impl From<io::Error> for ErrorKind {
+impl error::Error for Error {}
+
+impl From<io::Error> for Error {
     fn from(err: io::Error) -> Self {
-        ErrorKind::Io(err)
+        Error::Io(err)
     }
 }
 
-impl From<syn::Error> for ErrorKind {
+impl From<syn::Error> for Error {
     fn from(err: syn::Error) -> Self {
-        ErrorKind::Parse(err)
+        Error::Parse(err)
     }
 }
 
-impl fmt::Display for ErrorKind {
+impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            ErrorKind::Io(err) => write!(f, "IO error: {}", err),
-            ErrorKind::Parse(err) => write!(f, "parse error: {}", err),
+            Error::Io(err) => write!(f, "IO error: {}", err),
+            Error::Parse(err) => write!(f, "parse error: {}", err),
         }
     }
 }
 
-/// An inlining that was partially - but not completely - successful. The root file was parsed
-/// successfully, but 1 or more referenced modules failed to load.
-pub struct IncompleteInlining {
+/// The result of a best-effort attempt at inlining. This struct guarantees that the origin
+/// file was readable and valid Rust source code, but `errors` must be inspected to check if
+/// everything was inlined successfully.
+pub struct InliningResult {
     output: syn::File,
     errors: Vec<InlineError>,
 }
 
-impl IncompleteInlining {
-    /// Create a new `IncompleteInlining` with the best-effort output and the list of errors
-    /// encountered.
-    ///
-    /// # Panics
-    /// This function will panic if `errors` is empty. An empty error list means the inlining
-    /// is complete, and this struct should not be used.
+impl InliningResult {
+    /// Create a new `InliningResult` with the best-effort output and any errors encountered
+    /// during the inlining process.
     pub(crate) fn new(output: syn::File, errors: Vec<InlineError>) -> Self {
-        if errors.is_empty() {
-            panic!("Inlining must encounter 1 or more errors to be incomplete");
-        }
-
-        Self { output, errors }
+        InliningResult { output, errors }
     }
 
     /// The best-effort result of inlining.
@@ -218,31 +156,45 @@ impl IncompleteInlining {
         &self.errors
     }
 
+    /// Whether the result has any errors. `false` implies that all inlining operations completed
+    /// successfully.
+    pub fn has_errors(&self) -> bool {
+        !self.errors.is_empty()
+    }
+
     /// Break an incomplete inlining into the best-effort parsed result and the errors encountered.
     ///
     /// # Usage
     ///
-    /// ```rust,norun
-    /// # use syn_inline_mod::{Error, IncompleteInlining};
-    /// # #[allow(unused_vars)]
-    /// # fn handle_error(error: Error) {
-    /// if let Error::Inline(err) = error {
-    ///     let (output, errors) = err.into_output_and_errors();
+    /// ```rust,no_run
+    /// # #![allow(unused_variables)]
+    /// # use std::path::Path;
+    /// # use syn_inline_mod::InlinerBuilder;
+    /// let result = InlinerBuilder::default().parse_and_inline_modules(Path::new("foo.rs"));
+    /// match result {
+    ///     Err(e) => unimplemented!(),
+    ///     Ok(r) if r.has_errors() => {
+    ///         let (best_effort, errors) = r.into_output_and_errors();
+    ///         // do things with the partial output and the errors
+    ///     },
+    ///     Ok(r) => {
+    ///         let (complete, _) = r.into_output_and_errors();
+    ///         // do things with the completed output
+    ///     }
     /// }
-    /// # }
     /// ```
     pub fn into_output_and_errors(self) -> (syn::File, Vec<InlineError>) {
         (self.output, self.errors)
     }
 }
 
-impl fmt::Debug for IncompleteInlining {
+impl fmt::Debug for InliningResult {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         self.errors.fmt(f)
     }
 }
 
-impl fmt::Display for IncompleteInlining {
+impl fmt::Display for InliningResult {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         writeln!(f, "Inlining partially completed before errors:")?;
         for error in &self.errors {
@@ -260,7 +212,7 @@ pub struct InlineError {
     module_name: String,
     src_span: Span,
     path: PathBuf,
-    kind: ErrorKind,
+    kind: Error,
 }
 
 impl InlineError {
@@ -268,7 +220,7 @@ impl InlineError {
         src_path: impl Into<PathBuf>,
         item_mod: &ItemMod,
         path: impl Into<PathBuf>,
-        kind: ErrorKind,
+        kind: Error,
     ) -> Self {
         Self {
             src_path: src_path.into(),
@@ -305,7 +257,7 @@ impl InlineError {
     }
 
     /// Returns the reason for this error happening.
-    pub fn kind(&self) -> &ErrorKind {
+    pub fn kind(&self) -> &Error {
         &self.kind
     }
 }
@@ -358,7 +310,8 @@ mod tests {
     fn happy_path() {
         let result = InlinerBuilder::default()
             .parse_internal(Path::new("src/lib.rs"), make_test_env())
-            .unwrap();
+            .unwrap()
+            .output;
 
         assert_eq!(
             result.into_token_stream().to_string(),
@@ -391,13 +344,11 @@ mod tests {
         env.register("src/lib.rs", "mod missing;\nmod invalid;");
         env.register("src/invalid.rs", "this-is-not-valid-rust!");
 
-        let result = InlinerBuilder::default()
-            .track_errors(true)
-            .parse_internal(Path::new("src/lib.rs"), env);
+        let result = InlinerBuilder::default().parse_internal(Path::new("src/lib.rs"), env);
 
         match result {
-            Err(Error::Inline(incomplete)) => {
-                let errors = &incomplete.errors;
+            Ok(r) if r.has_errors() => {
+                let errors = &r.errors;
                 assert_eq!(errors.len(), 2, "expected 2 errors");
 
                 let error = &errors[0];
@@ -413,7 +364,7 @@ mod tests {
                 assert_eq!(error.src_span().end().column, 12);
                 assert_eq!(error.path(), Path::new("src/missing/mod.rs"));
                 let io_err = match error.kind() {
-                    ErrorKind::Io(err) => err,
+                    Error::Io(err) => err,
                     _ => panic!("expected ErrorKind::Io, found {}", error.kind()),
                 };
                 assert_eq!(io_err.kind(), io::ErrorKind::NotFound);
@@ -431,13 +382,13 @@ mod tests {
                 assert_eq!(error.src_span().end().column, 12);
                 assert_eq!(error.path(), Path::new("src/invalid.rs"));
                 match error.kind() {
-                    ErrorKind::Parse(_) => {}
-                    ErrorKind::Io(_) => panic!("expected ErrorKind::Parse, found {}", error.kind()),
+                    Error::Parse(_) => {}
+                    Error::Io(_) => panic!("expected ErrorKind::Parse, found {}", error.kind()),
                 }
             }
             Ok(parsed) => panic!(
                 "Expected to get errors in parse/inline: {}",
-                parsed.into_token_stream()
+                parsed.output.into_token_stream()
             ),
             _ => unreachable!(),
         }
@@ -479,7 +430,8 @@ mod tests {
 
         let result = InlinerBuilder::default()
             .parse_internal(Path::new("src/lib.rs"), env)
-            .unwrap();
+            .unwrap()
+            .output;
 
         assert_eq!(
             result.into_token_stream().to_string(),
@@ -536,7 +488,8 @@ mod tests {
 
         let result = InlinerBuilder::default()
             .parse_internal(Path::new("src/lib.rs"), env)
-            .unwrap();
+            .unwrap()
+            .output;
 
         assert_eq!(
             result.into_token_stream().to_string(),

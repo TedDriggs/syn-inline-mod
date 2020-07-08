@@ -1,4 +1,4 @@
-use crate::ErrorKind;
+use crate::Error;
 use std::path::Path;
 
 /// A resolver that can turn paths into `syn::File` instances.
@@ -9,7 +9,7 @@ pub(crate) trait FileResolver {
     /// Resolves the given path into a file.
     ///
     /// Returns an error if the file couldn't be loaded or parsed as valid Rust.
-    fn resolve(&self, path: &Path) -> Result<syn::File, ErrorKind>;
+    fn resolve(&self, path: &Path) -> Result<syn::File, Error>;
 }
 
 #[derive(Default, Clone)]
@@ -20,7 +20,7 @@ impl FileResolver for FsResolver {
         path.exists()
     }
 
-    fn resolve(&self, path: &Path) -> Result<syn::File, ErrorKind> {
+    fn resolve(&self, path: &Path) -> Result<syn::File, Error> {
         let src = std::fs::read_to_string(path)?;
         Ok(syn::parse_file(&src)?)
     }
@@ -47,7 +47,7 @@ impl FileResolver for TestResolver {
         self.files.contains_key(path)
     }
 
-    fn resolve(&self, path: &Path) -> Result<syn::File, ErrorKind> {
+    fn resolve(&self, path: &Path) -> Result<syn::File, Error> {
         let src = self.files.get(path).ok_or_else(|| {
             std::io::Error::new(
                 std::io::ErrorKind::NotFound,
@@ -69,7 +69,7 @@ impl FileResolver for PathCommentResolver {
         true
     }
 
-    fn resolve(&self, path: &Path) -> Result<syn::File, ErrorKind> {
+    fn resolve(&self, path: &Path) -> Result<syn::File, Error> {
         Ok(syn::parse_file(&format!(
             r#"const PATH: &str = "{}";"#,
             path.to_str().unwrap()
