@@ -1,10 +1,14 @@
 //! Utility to traverse the file-system and inline modules that are declared as references to
 //! other Rust files.
 
+use proc_macro2::Span;
 use std::{
     borrow::Cow,
+    error, fmt,
     path::{Path, PathBuf},
 };
+use syn::spanned::Spanned;
+use syn::ItemMod;
 
 mod mod_path;
 mod resolver;
@@ -18,10 +22,8 @@ pub(crate) use visitor::Visitor;
 /// recursively inlined.
 ///
 /// This is equivalent to using an `InlinerBuilder` with the default settings.
-pub fn parse_and_inline_modules(src_file: &std::path::Path) -> syn::File {
-    InlinerBuilder::default()
-        .parse_and_inline_modules(src_file)
-        .unwrap()
+pub fn parse_and_inline_modules(src_file: &std::path::Path) -> Result<syn::File, Error> {
+    InlinerBuilder::default().parse_and_inline_modules(src_file)
 }
 
 /// A builder that can configure how to inline modules.
@@ -61,8 +63,8 @@ impl InlinerBuilder {
         self
     }
 
-    /// Configures whether unexpanded modules (due to a missing file) will lead
-    /// to an `Err` return value or not.
+    /// Configures whether unexpanded modules (due to missing files or invalid Rust sourcd code)
+    /// will lead to an `Err` return value or not.
     ///
     /// Default: `false`.
     pub fn error_not_found(&mut self, error_not_found: bool) -> &mut Self {
@@ -88,42 +90,167 @@ impl InlinerBuilder {
         };
         let result =
             Visitor::<R>::with_resolver(src_file, self.root, errors.as_mut(), Cow::Owned(resolver))
-                .visit();
+                .visit()
+                .map_err(|kind| Error::Initial(kind))?;
         match errors {
             Some(ref errors) if errors.is_empty() => Ok(result),
             None => Ok(result),
-            Some(errors) => Err(Error::NotFound(errors)),
+            Some(errors) => Err(Error::Inline(errors)),
         }
     }
 }
 
-/// A source location
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SourceLocation {
-    pub path: PathBuf,
-    pub line: usize,
-    pub column: usize,
-    _private: (),
-}
-
-impl SourceLocation {
-    pub(crate) fn new(path: &Path, span: proc_macro2::Span) -> Self {
-        SourceLocation {
-            path: path.into(),
-            line: span.start().line,
-            column: span.start().column,
-            _private: (),
-        }
-    }
-}
-
-/// An error that was encountered while inlining modules
+/// An error that was encountered while reading, parsing or inlining a module.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum Error {
-    /// The contents for one or more modules could not be found
-    NotFound(Vec<(String, SourceLocation)>),
-    #[doc(hidden)]
-    __NonExhaustive,
+    /// An error happened while reading or parsing the initial file.
+    ///
+    /// For example, the initial file wasn't found or wasn't a valid Rust file.
+    Initial(ErrorKind),
+
+    /// The initial file was successfully loaded, but some errors happened while attempting to
+    /// inline modules.
+    Inline(Vec<InlineError>),
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Error::Initial(kind) => write!(f, "error for initial file: {}", kind),
+            Error::Inline(errors) => {
+                writeln!(f, "errors while inlining modules:")?;
+                for error in errors {
+                    writeln!(f, "* {}", error)?;
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
+impl error::Error for Error {}
+
+impl Error {
+    /// Returns true if the error happened while reading or parsing the initial file.
+    pub fn is_initial(&self) -> bool {
+        match self {
+            Error::Initial(_) => true,
+            Error::Inline(_) => false,
+        }
+    }
+
+    /// Returns true if the error happened while inlining modules.
+    pub fn is_inline(&self) -> bool {
+        match self {
+            Error::Initial(_) => false,
+            Error::Inline(_) => true,
+        }
+    }
+}
+
+/// The kind of error that was encountered for a particular file.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum ErrorKind {
+    /// An error happened while opening or reading the file.
+    Io(std::io::Error),
+
+    /// Errors happened while using `syn` to parse the file.
+    Parse(syn::Error),
+}
+
+impl From<std::io::Error> for ErrorKind {
+    fn from(err: std::io::Error) -> Self {
+        ErrorKind::Io(err)
+    }
+}
+
+impl From<syn::Error> for ErrorKind {
+    fn from(err: syn::Error) -> Self {
+        ErrorKind::Parse(err)
+    }
+}
+
+impl fmt::Display for ErrorKind {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            ErrorKind::Io(err) => write!(f, "IO error: {}", err),
+            ErrorKind::Parse(err) => write!(f, "parse error: {}", err),
+        }
+    }
+}
+
+/// An error that happened while attempting to inline a module.
+#[derive(Debug)]
+pub struct InlineError {
+    src_path: PathBuf,
+    module_name: String,
+    src_span: Span,
+    path: PathBuf,
+    kind: ErrorKind,
+}
+
+impl InlineError {
+    pub(crate) fn new(
+        src_path: impl Into<PathBuf>,
+        item_mod: &ItemMod,
+        path: impl Into<PathBuf>,
+        kind: ErrorKind,
+    ) -> Self {
+        Self {
+            src_path: src_path.into(),
+            module_name: item_mod.ident.to_string(),
+            src_span: item_mod.span(),
+            path: path.into(),
+            kind,
+        }
+    }
+
+    /// Returns the source path where the error originated.
+    ///
+    /// The file at this path parsed correctly, but it caused the file at `self.path()` to be read.
+    pub fn src_path(&self) -> &Path {
+        &self.src_path
+    }
+
+    /// Returns the name of the module that was attempted to be inlined.
+    pub fn module_name(&self) -> &str {
+        &self.module_name
+    }
+
+    /// Returns the `Span` (including line and column information) in the source path that caused
+    /// `self.path()` to be included.
+    pub fn src_span(&self) -> proc_macro2::Span {
+        self.src_span
+    }
+
+    /// Returns the path where the error happened.
+    ///
+    /// Reading and parsing this file failed for the reason listed in `self.kind()`.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Returns the reason for this error happening.
+    pub fn kind(&self) -> &ErrorKind {
+        &self.kind
+    }
+}
+
+impl fmt::Display for InlineError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let start = self.src_span.start();
+        write!(
+            f,
+            "{}:{}:{}: error while including {}: {}",
+            self.src_path.display(),
+            start.line,
+            start.column,
+            self.path.display(),
+            self.kind
+        )
+    }
 }
 
 #[cfg(test)]
@@ -185,30 +312,55 @@ mod tests {
         );
     }
 
-    /// Test case involving a missing module
+    /// Test case involving missing and invalid modules
     #[test]
     fn missing_module() {
         let mut env = TestResolver::default();
-        env.register("src/lib.rs", "mod missing;");
+        env.register("src/lib.rs", "mod missing;\nmod invalid;");
+        env.register("src/invalid.rs", "this-is-not-valid-rust!");
 
         let result = InlinerBuilder::default()
             .error_not_found(true)
             .parse_internal(Path::new("src/lib.rs"), env);
 
         match result {
-            Err(Error::NotFound(errors)) => {
+            Err(Error::Inline(errors)) => {
+                assert_eq!(errors.len(), 2, "expected 2 errors");
+
+                let error = &errors[0];
                 assert_eq!(
-                    errors,
-                    [(
-                        "missing".into(),
-                        SourceLocation {
-                            path: PathBuf::from("src/lib.rs"),
-                            line: 1,
-                            column: 0,
-                            _private: ()
-                        }
-                    )]
+                    error.src_path(),
+                    Path::new("src/lib.rs"),
+                    "correct source path"
                 );
+                assert_eq!(error.module_name(), "missing");
+                assert_eq!(error.src_span().start().line, 1);
+                assert_eq!(error.src_span().start().column, 0);
+                assert_eq!(error.src_span().end().line, 1);
+                assert_eq!(error.src_span().end().column, 12);
+                assert_eq!(error.path(), Path::new("src/missing/mod.rs"));
+                let io_err = match error.kind() {
+                    ErrorKind::Io(err) => err,
+                    _ => panic!("expected ErrorKind::Io, found {}", error.kind()),
+                };
+                assert_eq!(io_err.kind(), std::io::ErrorKind::NotFound);
+
+                let error = &errors[1];
+                assert_eq!(
+                    error.src_path(),
+                    Path::new("src/lib.rs"),
+                    "correct source path"
+                );
+                assert_eq!(error.module_name(), "invalid");
+                assert_eq!(error.src_span().start().line, 2);
+                assert_eq!(error.src_span().start().column, 0);
+                assert_eq!(error.src_span().end().line, 2);
+                assert_eq!(error.src_span().end().column, 12);
+                assert_eq!(error.path(), Path::new("src/invalid.rs"));
+                match error.kind() {
+                    ErrorKind::Parse(_) => {}
+                    ErrorKind::Io(_) => panic!("expected ErrorKind::Parse, found {}", error.kind()),
+                }
             }
             Ok(parsed) => panic!(
                 "Expected to get errors in parse/inline: {}",
