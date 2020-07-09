@@ -107,7 +107,14 @@ pub enum Error {
     Parse(syn::Error),
 }
 
-impl error::Error for Error {}
+impl error::Error for Error {
+    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
+        match self {
+            Error::Io(err) => Some(err),
+            Error::Parse(err) => Some(err),
+        }
+    }
+}
 
 impl From<io::Error> for Error {
     fn from(err: io::Error) -> Self {
@@ -124,8 +131,8 @@ impl From<syn::Error> for Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Error::Io(err) => write!(f, "IO error: {}", err),
-            Error::Parse(err) => write!(f, "parse error: {}", err),
+            Error::Io(_) => write!(f, "IO error"),
+            Error::Parse(_) => write!(f, "parse error"),
         }
     }
 }
