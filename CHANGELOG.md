@@ -1,5 +1,8 @@
 # Changelog
 
+## v0.4.0 (July 8, 2020)
+- Expose errors for invalid Rust source code (#11, #13)
+
 ## v0.2.0 (June 18, 2019)
 - Distinguish root and non-root modules (#6)(https://github.com/TedDriggs/syn-inline-mod/pull/6)
 

@@ -1,5 +1,4 @@
-use std::fs::File;
-use std::io::Read;
+use crate::Error;
 use std::path::Path;
 
 /// A resolver that can turn paths into `syn::File` instances.
@@ -7,7 +6,10 @@ pub(crate) trait FileResolver {
     /// Check if `path` exists in the backing data store.
     fn path_exists(&self, path: &Path) -> bool;
 
-    fn resolve(&self, path: &Path) -> syn::File;
+    /// Resolves the given path into a file.
+    ///
+    /// Returns an error if the file couldn't be loaded or parsed as valid Rust.
+    fn resolve(&self, path: &Path) -> Result<syn::File, Error>;
 }
 
 #[derive(Default, Clone)]
@@ -18,13 +20,9 @@ impl FileResolver for FsResolver {
         path.exists()
     }
 
-    fn resolve(&self, path: &Path) -> syn::File {
-        let mut file = File::open(&path).expect("Unable to open file");
-
-        let mut src = String::new();
-        file.read_to_string(&mut src).expect("Unable to read file");
-
-        syn::parse_file(&src).expect("Unable to parse file")
+    fn resolve(&self, path: &Path) -> Result<syn::File, Error> {
+        let src = std::fs::read_to_string(path)?;
+        Ok(syn::parse_file(&src)?)
     }
 }
 
@@ -49,17 +47,14 @@ impl FileResolver for TestResolver {
         self.files.contains_key(path)
     }
 
-    fn resolve(&self, path: &Path) -> syn::File {
-        let src = self
-            .files
-            .get(path)
-            .expect("Test should only refer to files in context");
-        syn::parse_file(src).unwrap_or_else(|_| {
-            panic!(
-                "Test code in {} should be parseable",
-                path.to_string_lossy()
+    fn resolve(&self, path: &Path) -> Result<syn::File, Error> {
+        let src = self.files.get(path).ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "path not in test resolver hashmap",
             )
-        })
+        })?;
+        Ok(syn::parse_file(src)?)
     }
 }
 
@@ -74,11 +69,10 @@ impl FileResolver for PathCommentResolver {
         true
     }
 
-    fn resolve(&self, path: &Path) -> syn::File {
-        syn::parse_file(&format!(
+    fn resolve(&self, path: &Path) -> Result<syn::File, Error> {
+        Ok(syn::parse_file(&format!(
             r#"const PATH: &str = "{}";"#,
             path.to_str().unwrap()
-        ))
-        .unwrap()
+        ))?)
     }
 }
