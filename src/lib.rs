@@ -166,7 +166,7 @@ impl InliningResult {
     ///
     /// # Usage
     ///
-    /// ```rust,no_run
+    /// ```rust,ignore
     /// # #![allow(unused_variables)]
     /// # use std::path::Path;
     /// # use syn_inline_mod::InlinerBuilder;
@@ -346,51 +346,46 @@ mod tests {
 
         let result = InlinerBuilder::default().parse_internal(Path::new("src/lib.rs"), env);
 
-        match result {
-            Ok(r) if r.has_errors() => {
-                let errors = &r.errors;
-                assert_eq!(errors.len(), 2, "expected 2 errors");
+        if let Ok(r) = result {
+            let errors = &r.errors;
+            assert_eq!(errors.len(), 2, "expected 2 errors");
 
-                let error = &errors[0];
-                assert_eq!(
-                    error.src_path(),
-                    Path::new("src/lib.rs"),
-                    "correct source path"
-                );
-                assert_eq!(error.module_name(), "missing");
-                assert_eq!(error.src_span().start().line, 1);
-                assert_eq!(error.src_span().start().column, 0);
-                assert_eq!(error.src_span().end().line, 1);
-                assert_eq!(error.src_span().end().column, 12);
-                assert_eq!(error.path(), Path::new("src/missing/mod.rs"));
-                let io_err = match error.kind() {
-                    Error::Io(err) => err,
-                    _ => panic!("expected ErrorKind::Io, found {}", error.kind()),
-                };
-                assert_eq!(io_err.kind(), io::ErrorKind::NotFound);
+            let error = &errors[0];
+            assert_eq!(
+                error.src_path(),
+                Path::new("src/lib.rs"),
+                "correct source path"
+            );
+            assert_eq!(error.module_name(), "missing");
+            assert_eq!(error.src_span().start().line, 1);
+            assert_eq!(error.src_span().start().column, 0);
+            assert_eq!(error.src_span().end().line, 1);
+            assert_eq!(error.src_span().end().column, 12);
+            assert_eq!(error.path(), Path::new("src/missing/mod.rs"));
+            let io_err = match error.kind() {
+                Error::Io(err) => err,
+                _ => panic!("expected ErrorKind::Io, found {}", error.kind()),
+            };
+            assert_eq!(io_err.kind(), io::ErrorKind::NotFound);
 
-                let error = &errors[1];
-                assert_eq!(
-                    error.src_path(),
-                    Path::new("src/lib.rs"),
-                    "correct source path"
-                );
-                assert_eq!(error.module_name(), "invalid");
-                assert_eq!(error.src_span().start().line, 2);
-                assert_eq!(error.src_span().start().column, 0);
-                assert_eq!(error.src_span().end().line, 2);
-                assert_eq!(error.src_span().end().column, 12);
-                assert_eq!(error.path(), Path::new("src/invalid.rs"));
-                match error.kind() {
-                    Error::Parse(_) => {}
-                    Error::Io(_) => panic!("expected ErrorKind::Parse, found {}", error.kind()),
-                }
+            let error = &errors[1];
+            assert_eq!(
+                error.src_path(),
+                Path::new("src/lib.rs"),
+                "correct source path"
+            );
+            assert_eq!(error.module_name(), "invalid");
+            assert_eq!(error.src_span().start().line, 2);
+            assert_eq!(error.src_span().start().column, 0);
+            assert_eq!(error.src_span().end().line, 2);
+            assert_eq!(error.src_span().end().column, 12);
+            assert_eq!(error.path(), Path::new("src/invalid.rs"));
+            match error.kind() {
+                Error::Parse(_) => {}
+                Error::Io(_) => panic!("expected ErrorKind::Parse, found {}", error.kind()),
             }
-            Ok(parsed) => panic!(
-                "Expected to get errors in parse/inline: {}",
-                parsed.output.into_token_stream()
-            ),
-            _ => unreachable!(),
+        } else {
+            unreachable!();
         }
     }
 
