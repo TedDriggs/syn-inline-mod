@@ -31,8 +31,7 @@ pub(crate) use visitor::Visitor;
 /// # Error Handling
 ///
 /// This function ignores most error cases to return a best-effort result. To be informed of
-/// failures that occur while inlining referenced modules, create an `InlinerBuilder` with
-/// `track_errors(true)` set.
+/// failures that occur while inlining referenced modules, create an `InlinerBuilder` instead.
 pub fn parse_and_inline_modules(src_file: &Path) -> syn::File {
     InlinerBuilder::default()
         .parse_and_inline_modules(src_file)
@@ -73,7 +72,7 @@ impl InlinerBuilder {
         self
     }
 
-    /// Parse the source code in `src_file` and return a `syn::File` that has all modules
+    /// Parse the source code in `src_file` and return an `InliningResult` that has all modules
     /// recursively inlined.
     pub fn parse_and_inline_modules(&self, src_file: &Path) -> Result<InliningResult, Error> {
         self.parse_internal(src_file, FsResolver::default())
@@ -131,9 +130,10 @@ impl fmt::Display for Error {
     }
 }
 
-/// The result of a best-effort attempt at inlining. This struct guarantees that the origin
-/// file was readable and valid Rust source code, but `errors` must be inspected to check if
-/// everything was inlined successfully.
+/// The result of a best-effort attempt at inlining.
+///
+/// This struct guarantees that the origin file was readable and valid Rust source code, but
+/// `errors` must be inspected to check if everything was inlined successfully.
 pub struct InliningResult {
     output: syn::File,
     errors: Vec<InlineError>,
@@ -151,7 +151,7 @@ impl InliningResult {
         &self.output
     }
 
-    /// The errors that kept the inlining from completing. This is guaranteed not to be empty.
+    /// The errors that kept the inlining from completing. May be empty if there were no errors.
     pub fn errors(&self) -> &[InlineError] {
         &self.errors
     }
