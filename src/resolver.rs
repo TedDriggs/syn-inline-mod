@@ -9,20 +9,34 @@ pub(crate) trait FileResolver {
     /// Resolves the given path into a file.
     ///
     /// Returns an error if the file couldn't be loaded or parsed as valid Rust.
-    fn resolve(&self, path: &Path) -> Result<syn::File, Error>;
+    fn resolve(&mut self, path: &Path) -> Result<syn::File, Error>;
 }
 
-#[derive(Default, Clone)]
-pub(crate) struct FsResolver;
+#[derive(Clone)]
+pub(crate) struct FsResolver<F> {
+    on_load: F,
+}
 
-impl FileResolver for FsResolver {
+impl<F> FsResolver<F> {
+    pub(crate) fn new(on_load: F) -> Self {
+        Self { on_load }
+    }
+}
+
+impl<F> FileResolver for FsResolver<F>
+where
+    F: FnMut(&Path, String),
+{
     fn path_exists(&self, path: &Path) -> bool {
         path.exists()
     }
 
-    fn resolve(&self, path: &Path) -> Result<syn::File, Error> {
+    fn resolve(&mut self, path: &Path) -> Result<syn::File, Error> {
         let src = std::fs::read_to_string(path)?;
-        Ok(syn::parse_file(&src)?)
+        let res = syn::parse_file(&src);
+        // Call the callback whether the file parsed successfully or not.
+        (self.on_load)(path, src);
+        Ok(res?)
     }
 }
 
@@ -47,7 +61,7 @@ impl FileResolver for TestResolver {
         self.files.contains_key(path)
     }
 
-    fn resolve(&self, path: &Path) -> Result<syn::File, Error> {
+    fn resolve(&mut self, path: &Path) -> Result<syn::File, Error> {
         let src = self.files.get(path).ok_or_else(|| {
             std::io::Error::new(
                 std::io::ErrorKind::NotFound,
@@ -69,7 +83,7 @@ impl FileResolver for PathCommentResolver {
         true
     }
 
-    fn resolve(&self, path: &Path) -> Result<syn::File, Error> {
+    fn resolve(&mut self, path: &Path) -> Result<syn::File, Error> {
         Ok(syn::parse_file(&format!(
             r#"const PATH: &str = "{}";"#,
             path.to_str().unwrap()

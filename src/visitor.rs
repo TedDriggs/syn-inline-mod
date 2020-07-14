@@ -1,12 +1,11 @@
-use std::borrow::Cow;
 use std::path::Path;
 
 use syn::visit_mut::VisitMut;
 use syn::ItemMod;
 
-use crate::{Error, FileResolver, FsResolver, InlineError, ModContext};
+use crate::{Error, FileResolver, InlineError, ModContext};
 
-pub(crate) struct Visitor<'a, R: Clone> {
+pub(crate) struct Visitor<'a, R> {
     /// The current file's path.
     path: &'a Path,
     /// Whether this is the root file or not
@@ -16,26 +15,19 @@ pub(crate) struct Visitor<'a, R: Clone> {
     mod_context: ModContext,
     /// The resolver that can be used to turn paths into `syn::File` instances. This removes
     /// a direct file-system dependency so the expander can be tested.
-    resolver: Cow<'a, R>,
+    resolver: &'a mut R,
     /// A log of module items that weren't expanded.
     error_log: Option<&'a mut Vec<InlineError>>,
 }
 
-impl<'a, R: FileResolver + Default + Clone> Visitor<'a, R> {
-    /// Create a new visitor with a default instance of the specified `FileResolver` type.
-    fn new(path: &'a Path, root: bool, error_log: Option<&'a mut Vec<InlineError>>) -> Self {
-        Self::with_resolver(path, root, error_log, Cow::Owned(R::default()))
-    }
-}
-
-impl<'a, R: FileResolver + Clone> Visitor<'a, R> {
+impl<'a, R: FileResolver> Visitor<'a, R> {
     /// Create a new visitor with the specified `FileResolver` instance. This will be
     /// used by all spawned visitors as we recurse down through the source code.
-    pub fn with_resolver(
+    pub fn new(
         path: &'a Path,
         root: bool,
         error_log: Option<&'a mut Vec<InlineError>>,
-        resolver: Cow<'a, R>,
+        resolver: &'a mut R,
     ) -> Self {
         Self {
             path,
@@ -53,7 +45,7 @@ impl<'a, R: FileResolver + Clone> Visitor<'a, R> {
     }
 }
 
-impl<'a, R: FileResolver + Clone> VisitMut for Visitor<'a, R> {
+impl<'a, R: FileResolver> VisitMut for Visitor<'a, R> {
     fn visit_item_mod_mut(&mut self, i: &mut ItemMod) {
         self.mod_context.push(i.into());
 
@@ -82,11 +74,11 @@ impl<'a, R: FileResolver + Clone> VisitMut for Visitor<'a, R> {
                         .expect("candidates should be non-empty")
                 });
 
-            let mut visitor = Visitor::with_resolver(
+            let mut visitor = Visitor::new(
                 &first_candidate,
                 false,
                 self.error_log.as_mut().map(|v| &mut **v),
-                self.resolver.clone(),
+                self.resolver,
             );
 
             match visitor.visit() {
@@ -106,12 +98,6 @@ impl<'a, R: FileResolver + Clone> VisitMut for Visitor<'a, R> {
     }
 }
 
-impl<'a> From<&'a Path> for Visitor<'a, FsResolver> {
-    fn from(path: &'a Path) -> Self {
-        Visitor::<FsResolver>::new(path, true, None)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use quote::{quote, ToTokens};
@@ -124,7 +110,8 @@ mod tests {
     #[test]
     fn ident_in_lib() {
         let path = Path::new("./lib.rs");
-        let mut visitor = Visitor::<PathCommentResolver>::new(&path, true, None);
+        let mut resolver = PathCommentResolver::default();
+        let mut visitor = Visitor::new(&path, true, None, &mut resolver);
         let mut file = syn::parse_file("mod c;").unwrap();
         visitor.visit_file_mut(&mut file);
         assert_eq!(
@@ -141,7 +128,8 @@ mod tests {
     #[test]
     fn path_attr() {
         let path = std::path::Path::new("./lib.rs");
-        let mut visitor = Visitor::<PathCommentResolver>::new(&path, true, None);
+        let mut resolver = PathCommentResolver::default();
+        let mut visitor = Visitor::new(&path, true, None, &mut resolver);
         let mut file = syn::parse_file(r#"#[path = "foo/bar.rs"] mod c;"#).unwrap();
         visitor.visit_file_mut(&mut file);
         assert_eq!(

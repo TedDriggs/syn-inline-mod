@@ -3,7 +3,6 @@
 
 use proc_macro2::Span;
 use std::{
-    borrow::Cow,
     error, fmt, io,
     path::{Path, PathBuf},
 };
@@ -75,21 +74,30 @@ impl InlinerBuilder {
     /// Parse the source code in `src_file` and return an `InliningResult` that has all modules
     /// recursively inlined.
     pub fn parse_and_inline_modules(&self, src_file: &Path) -> Result<InliningResult, Error> {
-        self.parse_internal(src_file, FsResolver::default())
+        self.parse_internal(src_file, &mut FsResolver::new(|_: &Path, _| {}))
     }
 
-    fn parse_internal<R: FileResolver + Clone>(
+    /// Parse the source code in `src_file` and return an `InliningResult` that has all modules
+    /// recursively inlined. Call the given callback whenever a file is loaded from disk (regardless
+    /// of if it parsed successfully).
+    pub fn inline_with_callback(
         &self,
         src_file: &Path,
-        resolver: R,
+        on_load: impl FnMut(&Path, String),
+    ) -> Result<InliningResult, Error> {
+        self.parse_internal(src_file, &mut FsResolver::new(on_load))
+    }
+
+    fn parse_internal<R: FileResolver>(
+        &self,
+        src_file: &Path,
+        resolver: &mut R,
     ) -> Result<InliningResult, Error> {
         // XXX There is no way for library callers to disable error tracking,
         // but until we're sure that there's no performance impact of enabling it
         // we'll let downstream code think that error tracking is optional.
         let mut errors = Some(vec![]);
-        let result =
-            Visitor::<R>::with_resolver(src_file, self.root, errors.as_mut(), Cow::Owned(resolver))
-                .visit()?;
+        let result = Visitor::<R>::new(src_file, self.root, errors.as_mut(), resolver).visit()?;
         Ok(InliningResult::new(result, errors.unwrap_or_default()))
     }
 }
@@ -316,7 +324,7 @@ mod tests {
     #[test]
     fn happy_path() {
         let result = InlinerBuilder::default()
-            .parse_internal(Path::new("src/lib.rs"), make_test_env())
+            .parse_internal(Path::new("src/lib.rs"), &mut make_test_env())
             .unwrap()
             .output;
 
@@ -351,7 +359,7 @@ mod tests {
         env.register("src/lib.rs", "mod missing;\nmod invalid;");
         env.register("src/invalid.rs", "this-is-not-valid-rust!");
 
-        let result = InlinerBuilder::default().parse_internal(Path::new("src/lib.rs"), env);
+        let result = InlinerBuilder::default().parse_internal(Path::new("src/lib.rs"), &mut env);
 
         if let Ok(r) = result {
             let errors = &r.errors;
@@ -431,7 +439,7 @@ mod tests {
         env.register("src/empty.rs", "");
 
         let result = InlinerBuilder::default()
-            .parse_internal(Path::new("src/lib.rs"), env)
+            .parse_internal(Path::new("src/lib.rs"), &mut env)
             .unwrap()
             .output;
 
@@ -489,7 +497,7 @@ mod tests {
         env.register("src/empty.rs", "");
 
         let result = InlinerBuilder::default()
-            .parse_internal(Path::new("src/lib.rs"), env)
+            .parse_internal(Path::new("src/lib.rs"), &mut env)
             .unwrap()
             .output;
 
