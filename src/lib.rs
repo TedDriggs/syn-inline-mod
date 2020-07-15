@@ -1,13 +1,14 @@
 //! Utility to traverse the file-system and inline modules that are declared as references to
 //! other Rust files.
 
+use os_str_bytes::OsStringBytes;
 use proc_macro2::Span;
 use std::{
     error, fmt, io,
     path::{Path, PathBuf},
 };
 use syn::spanned::Spanned;
-use syn::ItemMod;
+use syn::{Attribute, ItemMod, LitByteStr};
 
 mod mod_path;
 mod resolver;
@@ -38,6 +39,57 @@ pub fn parse_and_inline_modules(src_file: &Path) -> syn::File {
         .output
 }
 
+/// The string `syn_inline_mod_path`. This acts as a marker for inlined paths.
+pub(crate) static SYN_INLINE_MOD_PATH: &str = "syn_inline_mod_path";
+
+/// A module path in a list of attributes, found by `find_mod_path`.
+#[derive(Clone, Debug)]
+pub struct InlineModPath<'ast> {
+    /// The path this module resides in. Uses the same base (relative or absolute) as the
+    /// original path passed in.
+    pub path: PathBuf,
+
+    /// The outer attributes. These are of the form `#[attribute]` and are in the path that
+    /// imported this module.
+    pub outer_attributes: &'ast [Attribute],
+
+    /// The inner attributes. These are of the form `#![attribute]` and are defined in `path`.
+    ///
+    /// The attributes listed in `inner_attributes` will retain their preceding `!` -- that is
+    /// technically not valid Rust but is done this way for simplicity.
+    pub inner_attributes: &'ast [Attribute],
+}
+
+/// Given a list of attributes from an inlined module, search for the first attribute of the form
+/// `#[syn_inline_mod_path(b"...")]`. If it is found, then return a triple with:
+/// * the module path
+/// * the outer attributes
+/// * the inner attributes
+///
+/// See the documentation for `InlinerBuilder::annotate_paths` for more information.
+pub fn find_mod_path(attrs: &[Attribute]) -> Option<InlineModPath> {
+    let mut path = None;
+    let position = attrs.iter().position(|attr| {
+        if attr.path.is_ident(SYN_INLINE_MOD_PATH) {
+            // Ignore the attribute if it isn't of the correct form.
+            if let Ok(lit) = attr.parse_args::<LitByteStr>() {
+                let value = lit.value();
+                if let Ok(extracted_path) = PathBuf::from_vec(value) {
+                    // Record the extracted path in `path` above.
+                    path = Some(extracted_path);
+                }
+                return true;
+            }
+        }
+        false
+    })?;
+    Some(InlineModPath {
+        path: path.expect("position() returning Some means a path was found"),
+        outer_attributes: &attrs[0..position],
+        inner_attributes: &attrs[position + 1..],
+    })
+}
+
 /// A builder that can configure how to inline modules.
 ///
 /// After creating a builder, set configuration options using the methods
@@ -46,11 +98,15 @@ pub fn parse_and_inline_modules(src_file: &Path) -> syn::File {
 #[derive(Debug)]
 pub struct InlinerBuilder {
     root: bool,
+    annotate_paths: bool,
 }
 
 impl Default for InlinerBuilder {
     fn default() -> Self {
-        InlinerBuilder { root: true }
+        InlinerBuilder {
+            root: true,
+            annotate_paths: false,
+        }
     }
 }
 
@@ -68,6 +124,51 @@ impl InlinerBuilder {
     /// Default: `true`.
     pub fn root(&mut self, root: bool) -> &mut Self {
         self.root = root;
+        self
+    }
+
+    /// Configures whether modules being inlined should be annotated with the paths they
+    /// belong to.
+    ///
+    /// If this is true, every module that is inlined will have an annotation
+    /// `#[syn_inline_mod_path("...")]` added to it. This annotation can then be used to
+    /// figure out which path a particular module lives in.
+    ///
+    /// This is useful when mapping `Span` instances to the modules they come in.
+    ///
+    /// Default: `false`.
+    ///
+    /// ## Example
+    ///
+    /// If `foo_crate/src/lib.rs` contains:
+    ///
+    /// ```ignore
+    /// #[outer_attr]
+    /// pub mod foo_mod;
+    /// ```
+    ///
+    /// and `foo_crate/src/foo_mod.rs` contains:
+    ///
+    /// ```ignore
+    /// #![inner_attr]
+    ///
+    /// fn foo() {}
+    /// ```
+    ///
+    /// then setting this option to `true` will result in a module that looks something like:
+    ///
+    /// ```ignore
+    /// #[outer_attr]
+    /// #[syn_inline_mod_path(b"foo_crate/src/foo_mod.rs")]
+    /// #![inner_attr]
+    /// pub mod foo_mod {
+    ///     fn foo() {}
+    /// }
+    /// ```
+    ///
+    /// Note that paths are encoded as byte strings to allow non-Unicode paths to be represented.
+    pub fn annotate_paths(&mut self, annotate: bool) -> &mut Self {
+        self.annotate_paths = annotate;
         self
     }
 
@@ -97,8 +198,19 @@ impl InlinerBuilder {
         // but until we're sure that there's no performance impact of enabling it
         // we'll let downstream code think that error tracking is optional.
         let mut errors = Some(vec![]);
-        let result = Visitor::<R>::new(src_file, self.root, errors.as_mut(), resolver).visit()?;
-        Ok(InliningResult::new(result, errors.unwrap_or_default()))
+        let result = Visitor::<R>::new(
+            src_file,
+            self.root,
+            self.annotate_paths,
+            errors.as_mut(),
+            resolver,
+        )
+        .visit()?;
+        Ok(InliningResult::new(
+            result,
+            errors.unwrap_or_default(),
+            self.annotate_paths,
+        ))
     }
 }
 
@@ -152,13 +264,18 @@ impl fmt::Display for Error {
 pub struct InliningResult {
     output: syn::File,
     errors: Vec<InlineError>,
+    paths_annotated: bool,
 }
 
 impl InliningResult {
     /// Create a new `InliningResult` with the best-effort output and any errors encountered
     /// during the inlining process.
-    pub(crate) fn new(output: syn::File, errors: Vec<InlineError>) -> Self {
-        InliningResult { output, errors }
+    pub(crate) fn new(output: syn::File, errors: Vec<InlineError>, paths_annotated: bool) -> Self {
+        InliningResult {
+            output,
+            errors,
+            paths_annotated,
+        }
     }
 
     /// The best-effort result of inlining.
@@ -175,6 +292,14 @@ impl InliningResult {
     /// successfully.
     pub fn has_errors(&self) -> bool {
         !self.errors.is_empty()
+    }
+
+    /// Whether paths were annotated using `InlinerBuilder::annotate_paths`.
+    ///
+    /// If this is `true`, `find_mod_path` may be used to figure out the path a module is defined
+    /// in.
+    pub fn paths_annotated(&self) -> bool {
+        self.paths_annotated
     }
 
     /// Break an incomplete inlining into the best-effort parsed result and the errors encountered.
