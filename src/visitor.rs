@@ -1,15 +1,19 @@
 use std::path::Path;
 
+use os_str_bytes::OsStrBytes;
+use proc_macro2::{Ident, Span};
 use syn::visit_mut::VisitMut;
-use syn::ItemMod;
+use syn::{parse_quote, ItemMod, LitByteStr};
 
-use crate::{Error, FileResolver, InlineError, ModContext};
+use crate::{Error, FileResolver, InlineError, ModContext, SYN_INLINE_MOD_PATH};
 
 pub(crate) struct Visitor<'a, R> {
     /// The current file's path.
     path: &'a Path,
     /// Whether this is the root file or not
     root: bool,
+    /// Whether to annotate paths for inlined modules
+    annotate_paths: bool,
     /// The stack of `mod` entries where the visitor is currently located. This is needed
     /// for cases where modules are declared inside inline modules.
     mod_context: ModContext,
@@ -26,12 +30,14 @@ impl<'a, R: FileResolver> Visitor<'a, R> {
     pub fn new(
         path: &'a Path,
         root: bool,
+        annotate_paths: bool,
         error_log: Option<&'a mut Vec<InlineError>>,
         resolver: &'a mut R,
     ) -> Self {
         Self {
             path,
             root,
+            annotate_paths,
             resolver,
             error_log,
             mod_context: Default::default(),
@@ -77,12 +83,19 @@ impl<'a, R: FileResolver> VisitMut for Visitor<'a, R> {
             let mut visitor = Visitor::new(
                 &first_candidate,
                 false,
+                self.annotate_paths,
                 self.error_log.as_mut().map(|v| &mut **v),
                 self.resolver,
             );
 
             match visitor.visit() {
                 Ok(syn::File { attrs, items, .. }) => {
+                    if self.annotate_paths {
+                        let path = first_candidate.to_bytes();
+                        let path = LitByteStr::new(&path, Span::call_site());
+                        let attr_ident = Ident::new(SYN_INLINE_MOD_PATH, Span::call_site());
+                        i.attrs.push(parse_quote! { #[#attr_ident(#path)] });
+                    }
                     i.attrs.extend(attrs);
                     i.content = Some((Default::default(), items));
                 }
@@ -111,7 +124,7 @@ mod tests {
     fn ident_in_lib() {
         let path = Path::new("./lib.rs");
         let mut resolver = PathCommentResolver::default();
-        let mut visitor = Visitor::new(&path, true, None, &mut resolver);
+        let mut visitor = Visitor::new(&path, true, false, None, &mut resolver);
         let mut file = syn::parse_file("mod c;").unwrap();
         visitor.visit_file_mut(&mut file);
         assert_eq!(
@@ -129,7 +142,7 @@ mod tests {
     fn path_attr() {
         let path = std::path::Path::new("./lib.rs");
         let mut resolver = PathCommentResolver::default();
-        let mut visitor = Visitor::new(&path, true, None, &mut resolver);
+        let mut visitor = Visitor::new(&path, true, false, None, &mut resolver);
         let mut file = syn::parse_file(r#"#[path = "foo/bar.rs"] mod c;"#).unwrap();
         visitor.visit_file_mut(&mut file);
         assert_eq!(
