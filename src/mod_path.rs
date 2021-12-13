@@ -108,7 +108,7 @@ impl ModSegment {
 #[cfg(test)]
 impl ModSegment {
     pub(self) fn new_ident(ident: &'static str) -> Self {
-        ModSegment::Ident(syn::Ident::new(ident, syn::export::Span::call_site()))
+        ModSegment::Ident(syn::Ident::new(ident, proc_macro2::Span::call_site()))
     }
 
     pub(self) fn new_path(path: &'static str) -> Self {
