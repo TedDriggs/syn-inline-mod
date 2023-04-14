@@ -10,8 +10,7 @@ readme = "README.md"
 description = "Inlines modules in Rust source code for source analysis"
 
 [dependencies]
-syn = { version = "^1.0.0", default-features = false, features = ["parsing", "printing", "full", "visit-mut"] }
+# We support syn 1.x and 2.x
+syn = { version = ">=1.0.0, <3.0.0", default-features = false, features = ["parsing", "printing", "full", "visit-mut"] }
 proc-macro2 = { version = "^1.0.0", default-features = false, features = ["span-locations"] }
-
-[dev-dependencies]
 quote = "^1.0.0"

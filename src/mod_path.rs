@@ -1,7 +1,9 @@
 //! Path context tracking and candidate path generation for inlining.
 
 use std::path::{Path, PathBuf};
-use syn::{Ident, ItemMod, Lit, Meta};
+use syn::parse::{self, Parse, ParseStream};
+use syn::{Ident, ItemMod, LitStr, Token};
+use quote::ToTokens;
 
 /// Extensions to the built-in `Path` type for the purpose of mod expansion.
 trait ModPath {
@@ -116,15 +118,35 @@ impl ModSegment {
     }
 }
 
+/// #[path = "...."]
+struct PathAttr(LitStr);
+
+impl Parse for PathAttr {
+    fn parse(input: ParseStream<'_>) -> parse::Result<Self> {
+        let _p: Token![#] = input.parse()?;
+        let content;
+        syn::bracketed!(content in input);
+
+        let p: syn::Path = content.parse()?;
+        if !p.is_ident("path") {
+            return Err(parse::Error::new(proc_macro2::Span::call_site(), "Not a path attribute"));
+        }
+        let _t: Token![=] = content.parse()?;
+        Ok(Self(content.parse()?))
+    }
+}
+
 impl From<&ItemMod> for ModSegment {
     fn from(v: &ItemMod) -> Self {
         for attr in &v.attrs {
-            if let Ok(Meta::NameValue(name_value)) = attr.parse_meta() {
-                if name_value.path.is_ident("path") {
-                    if let Lit::Str(path_value) = name_value.lit {
-                        return ModSegment::Path(path_value.value().into());
-                    }
-                }
+            // This is a bit awkward: The attribute APIs have changed greatly from syn 1.0 to 2.0
+            // The only way to parse this attribute that works on both versions is to convert it to a token
+            // stream and use the regular syn parsing APIs.
+            //
+            // https://github.com/TedDriggs/syn-inline-mod/pull/20 shows what this code looks like
+            // when only supporting syn 2.0
+            if let Ok(PathAttr(path_value)) = syn::parse2(attr.to_token_stream()) {
+                return ModSegment::Path(path_value.value().into());
             }
         }
 
