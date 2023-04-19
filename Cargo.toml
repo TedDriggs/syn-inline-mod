@@ -10,7 +10,7 @@ readme = "README.md"
 description = "Inlines modules in Rust source code for source analysis"
 
 [dependencies]
-syn = { version = "^1.0.0", default-features = false, features = ["parsing", "printing", "full", "visit-mut"] }
+syn = { version = "^2.0.0", default-features = false, features = ["parsing", "printing", "full", "visit-mut"] }
 proc-macro2 = { version = "^1.0.0", default-features = false, features = ["span-locations"] }
 
 [dev-dependencies]

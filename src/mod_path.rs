@@ -1,7 +1,7 @@
 //! Path context tracking and candidate path generation for inlining.
 
 use std::path::{Path, PathBuf};
-use syn::{Ident, ItemMod, Lit, Meta};
+use syn::{Expr, ExprLit, Ident, ItemMod, Lit, Meta};
 
 /// Extensions to the built-in `Path` type for the purpose of mod expansion.
 trait ModPath {
@@ -119,9 +119,13 @@ impl ModSegment {
 impl From<&ItemMod> for ModSegment {
     fn from(v: &ItemMod) -> Self {
         for attr in &v.attrs {
-            if let Ok(Meta::NameValue(name_value)) = attr.parse_meta() {
+            if let Meta::NameValue(ref name_value) = attr.meta {
                 if name_value.path.is_ident("path") {
-                    if let Lit::Str(path_value) = name_value.lit {
+                    if let Expr::Lit(ExprLit {
+                        lit: Lit::Str(ref path_value),
+                        ..
+                    }) = name_value.value
+                    {
                         return ModSegment::Path(path_value.value().into());
                     }
                 }
