@@ -1,5 +1,8 @@
 # Changelog
 
+## v0.7.0 (Jul 30, 2026)
+- Update to `syn` 3.0
+
 ## v0.6.0 (April 21, 2023)
 - Update to `syn` 2.0
 
