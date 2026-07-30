@@ -112,7 +112,7 @@ mod tests {
         let path = Path::new("./lib.rs");
         let mut resolver = PathCommentResolver::default();
         let mut visitor = Visitor::new(&path, true, None, &mut resolver);
-        let mut file = syn::parse_file("mod c;").unwrap();
+        let mut file = syn::parse_file("mod c { const PATH : &str = \"./c.rs\" ; }").unwrap();
         visitor.visit_file_mut(&mut file);
         assert_eq!(
             file.into_token_stream().to_string(),
@@ -130,7 +130,7 @@ mod tests {
         let path = std::path::Path::new("./lib.rs");
         let mut resolver = PathCommentResolver::default();
         let mut visitor = Visitor::new(&path, true, None, &mut resolver);
-        let mut file = syn::parse_file(r#"#[path = "foo/bar.rs"] mod c;"#).unwrap();
+        let mut file = syn::parse_file(r#"#[path = "foo/bar.rs"] mod c { const PATH : & str = "./foo/bar.rs" ; }"#).unwrap();
         visitor.visit_file_mut(&mut file);
         assert_eq!(
             file.into_token_stream().to_string(),
